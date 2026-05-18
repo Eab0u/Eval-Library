@@ -5,7 +5,8 @@ This module is the single entry point for running evaluations. Its public
 surface is one async function, run_eval(), which orchestrates the full
 evaluation lifecycle:
 
-  1. Reads the Braintrust API key from the environment.
+  1. Resolves the Braintrust API key from the ``api_key`` parameter or the
+     environment. If neither is provided, the eval runs in local-only mode.
   2. Computes a SHA-256 hash of the dataset and appends the first 12 hex
      characters to the experiment name, making each (name, dataset) pair
      produce a stable, unique identifier in Braintrust.
@@ -14,9 +15,18 @@ evaluation lifecycle:
   4. Wraps each BaseScorer instance into a lightweight callable that matches
      the Braintrust scorer interface.
   5. Delegates execution to braintrust.Eval(), which handles parallelism,
-     logging, and result storage in the Braintrust platform.
+     logging, and result storage in the Braintrust platform — or, in
+     local-only mode, runs the task and scorers directly in-process.
   6. Converts the raw Braintrust results back into eval_lib's EvalResult
      objects and returns them to the caller.
+
+Braintrust integration (optional)
+-----------------------------------
+Braintrust is opt-in. If an API key is available (via the ``api_key``
+parameter or the ``BRAINTRUST_API_KEY`` environment variable), results are
+logged to Braintrust. If no key is found, run_eval() falls back to
+local-only mode: the task and scorers still run and EvalResult objects are
+still returned, but nothing is sent to Braintrust.
 
 Experiment name hashing
 ------------------------
@@ -39,10 +49,15 @@ SDK changes its interface, only this file needs to be updated.
 
 Environment variables
 ----------------------
-BRAINTRUST_API_KEY (required): Your Braintrust project API key. Obtain it
-    from the Braintrust dashboard. run_eval() raises EnvironmentError at call
-    time if this variable is absent or empty, so misconfiguration surfaces
-    immediately rather than mid-experiment.
+BRAINTRUST_API_KEY (optional): Your Braintrust project API key. Obtain it
+    from the Braintrust dashboard. If absent, run_eval() runs in local-only
+    mode and returns results without logging to Braintrust. The ``api_key``
+    parameter to run_eval() takes precedence over this variable.
+"""
+
+"""
+TLDR; Runner chucks the shit into braintrust and formats the resulting output 
+of braintrust running the test cases for the user.
 """
 
 import dataclasses
@@ -97,7 +112,7 @@ def _wrap_scorer(scorer: BaseScorer) -> Callable:
     """Adapt a BaseScorer instance into a Braintrust-compatible scorer callable.
 
     Braintrust scorers are callables that receive ``output``, ``expected``,
-    and ``input`` as keyword arguments and return either a float or a dict
+    and ``input`` as keyword arguments and return  a dict
     with ``name`` and ``score`` keys. This wrapper translates between that
     convention and eval_lib's BaseScorer.score() interface.
 
@@ -150,44 +165,38 @@ def _collect_results(
     return results
 
 
+async def _run_local(
+    dataset: list[EvalInput],
+    task: Callable[[EvalInput], Awaitable[EvalOutput]],
+    scorers: list[BaseScorer],
+) -> list[EvalResult]:
+    """Run the eval in-process without logging to Braintrust.
+
+    Used when no API key is available. Iterates over the dataset sequentially,
+    calls the task, applies each scorer, and returns EvalResult objects directly.
+    """
+    results: list[EvalResult] = []
+    for row in dataset:
+        output = await task(row)
+        scores = {s.name: s.score(output=output, input=row) for s in scorers}
+        results.append(EvalResult(input=row, output=output, scores=scores))
+    return results
+
+
 async def run_eval(
     name: str,
     dataset: list[EvalInput],
     task: Callable[[EvalInput], Awaitable[EvalOutput]],
     scorers: list[BaseScorer],
+    api_key: str | None = None,
 ) -> list[EvalResult]:
     """Run an evaluation experiment and return scored results.
-
-    This is the primary entry point for eval_lib. It orchestrates the full
-    eval lifecycle: type conversion, Braintrust experiment execution, and
-    result aggregation.
-
-    The function is async because the Braintrust Eval SDK is async. Call it
-    with ``await`` inside an existing event loop, or use ``asyncio.run()``
-    at the top level of a script.
-
-    Dataset hashing
-    ---------------
-    Before the experiment is submitted to Braintrust, ``run_eval`` serialises
-    the dataset to JSON (via ``dataclasses.asdict``) and computes a SHA-256
-    hash of that string. The first 12 hex characters of the digest are
-    appended to ``name``, producing the actual experiment name stored in
-    Braintrust (e.g. ``"my-eval-3f8a2c91b047"``). The full digest is stored
-    in the experiment metadata under the key ``dataset_hash``.
-
-    This prevents silent experiment contamination: if you reuse the same
-    ``name`` but swap in a different dataset, the hash suffix changes and
-    Braintrust records a separate experiment rather than interleaving rows
-    from two different benchmark versions.
 
     Parameters
     ----------
     name:
-        Human-readable experiment name shown in the Braintrust UI. The final
-        name stored in Braintrust is ``{name}-{12-char dataset hash}``; see
-        the *Dataset hashing* section above. Each call with the same name
-        **and** the same dataset contents will reuse the same suffixed name,
-        letting you track regressions over time without experiment pollution.
+        Human-readable experiment name. In Braintrust mode the final name
+        stored is ``{name}-{12-char dataset hash}``. Ignored in local-only mode.
 
     dataset:
         The list of test cases to evaluate. Each EvalInput carries the query
@@ -212,6 +221,12 @@ async def run_eval(
         the result. The built-in scorers are AccuracyScorer, CompletenessScorer,
         and CitationScorer; you can also supply custom subclasses.
 
+    api_key:
+        Braintrust API key. If provided, takes precedence over the
+        ``BRAINTRUST_API_KEY`` environment variable. If neither this parameter
+        nor the environment variable is set, the eval runs in local-only mode
+        and results are not logged to Braintrust.
+
     Returns
     -------
     list[EvalResult]
@@ -220,49 +235,36 @@ async def run_eval(
         produced by the task, and a ``scores`` dict mapping each scorer's name
         to its numeric score.
 
-    Raises
-    ------
-    EnvironmentError
-        If the ``BRAINTRUST_API_KEY`` environment variable is not set.
-
-    Example
-    -------
-    ::
-
-        import asyncio
-        from eval_lib.runner import run_eval
-        from eval_lib.types import EvalInput, EvalOutput
-        from eval_lib.scorers import AccuracyScorer, CompletenessScorer
-
-        dataset = [
-            EvalInput(
-                input="What is the capital of France?",
-                expected="Paris",
-            ),
-        ]
-
-        async def task(row: EvalInput) -> EvalOutput:
-            return EvalOutput(output=await my_pipeline(row.input))
+    Examples
+    --------
+    With a Braintrust key passed directly::
 
         results = asyncio.run(
             run_eval(
                 name="geography-v1",
                 dataset=dataset,
                 task=task,
-                scorers=[AccuracyScorer(), CompletenessScorer()],
+                scorers=[AccuracyScorer()],
+                api_key="bt-abc123",
             )
         )
 
-        for r in results:
-            print(r.scores)
-    """
-    api_key = os.environ.get(API_KEY_ENV_VAR)
-    if not api_key:
-        raise EnvironmentError(
-            f"The {API_KEY_ENV_VAR!r} environment variable is not set. "
-            "Obtain your API key from the Braintrust dashboard and export it "
-            "before calling run_eval()."
+    With a key in the environment (``BRAINTRUST_API_KEY`` is set)::
+
+        results = asyncio.run(
+            run_eval(name="geography-v1", dataset=dataset, task=task, scorers=[AccuracyScorer()])
         )
+
+    Local-only mode (no key anywhere — results returned, nothing logged)::
+
+        results = asyncio.run(
+            run_eval(name="geography-v1", dataset=dataset, task=task, scorers=[AccuracyScorer()])
+        )
+    """
+    resolved_key = api_key or os.environ.get(API_KEY_ENV_VAR)
+
+    if not resolved_key:
+        return await _run_local(dataset, task, scorers)
 
     serialized = json.dumps(
         [dataclasses.asdict(row) for row in dataset], sort_keys=True
@@ -275,7 +277,7 @@ async def run_eval(
         data=_to_braintrust_data(dataset),
         task=_wrap_task(task),
         scores=[_wrap_scorer(s) for s in scorers],
-        api_key=api_key,
+        api_key=resolved_key,
         metadata={"dataset_hash": dataset_hash},
     )
 

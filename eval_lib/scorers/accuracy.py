@@ -1,12 +1,14 @@
-"""
-Regex-based accuracy scorer.
-
-Checks whether the model output matches an expected pattern or exact string
-using regular expressions. Returns 1.0 on a full match, 0.0 otherwise.
-"""
+import re
 
 from eval_lib.scorers.base import BaseScorer
+from eval_lib.types import EvalInput, EvalOutput
 
 
 class AccuracyScorer(BaseScorer):
-    pass
+    def __init__(self, pattern: str | None = None):
+        self._pattern = pattern
+
+    def score(self, output: EvalOutput, input: EvalInput) -> float:
+        pattern = self._pattern if self._pattern is not None else input.expected
+        match = re.search(pattern, output.output, re.IGNORECASE)
+        return 1.0 if match else 0.0

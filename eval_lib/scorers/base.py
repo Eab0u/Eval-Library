@@ -1,11 +1,13 @@
-"""
-Abstract base class for eval_lib scorers.
+from abc import ABC, abstractmethod
 
-Defines the BaseScorer interface that all scorers must implement.
-Each scorer receives an EvalOutput and expected value, and returns a numeric score
-in [0.0, 1.0] along with optional metadata.
-"""
+from eval_lib.types import EvalInput, EvalOutput
 
 
-class BaseScorer:
-    pass
+class BaseScorer(ABC):
+    @property
+    def name(self) -> str:
+        return type(self).__name__.lower()
+
+    @abstractmethod
+    def score(self, output: EvalOutput, input: EvalInput) -> float:
+        ...

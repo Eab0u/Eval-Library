@@ -6,14 +6,27 @@ surface is one async function, run_eval(), which orchestrates the full
 evaluation lifecycle:
 
   1. Reads the Braintrust API key from the environment.
-  2. Converts the caller's eval_lib types (EvalInput / EvalOutput) into the
+  2. Computes a SHA-256 hash of the dataset and appends the first 12 hex
+     characters to the experiment name, making each (name, dataset) pair
+     produce a stable, unique identifier in Braintrust.
+  3. Converts the caller's eval_lib types (EvalInput / EvalOutput) into the
      dict-based format that the Braintrust Eval SDK expects.
-  3. Wraps each BaseScorer instance into a lightweight callable that matches
+  4. Wraps each BaseScorer instance into a lightweight callable that matches
      the Braintrust scorer interface.
-  4. Delegates execution to braintrust.Eval(), which handles parallelism,
+  5. Delegates execution to braintrust.Eval(), which handles parallelism,
      logging, and result storage in the Braintrust platform.
-  5. Converts the raw Braintrust results back into eval_lib's EvalResult
+  6. Converts the raw Braintrust results back into eval_lib's EvalResult
      objects and returns them to the caller.
+
+Experiment name hashing
+------------------------
+Experiment names are automatically suffixed with a 12-character dataset hash,
+so the name passed to Braintrust looks like ``{name}-{short_hash}``. This
+makes runs idempotent with respect to the dataset: the same name run against
+two different datasets produces two distinct experiments rather than a single
+experiment with mixed rows. The full SHA-256 hash is stored in the experiment
+metadata under the key ``dataset_hash`` for later querying in the Braintrust
+UI.
 
 Separation of concerns
 -----------------------
@@ -32,6 +45,9 @@ BRAINTRUST_API_KEY (required): Your Braintrust project API key. Obtain it
     immediately rather than mid-experiment.
 """
 
+import dataclasses
+import hashlib
+import json
 import os
 from collections.abc import Awaitable, Callable
 
@@ -150,12 +166,28 @@ async def run_eval(
     with ``await`` inside an existing event loop, or use ``asyncio.run()``
     at the top level of a script.
 
+    Dataset hashing
+    ---------------
+    Before the experiment is submitted to Braintrust, ``run_eval`` serialises
+    the dataset to JSON (via ``dataclasses.asdict``) and computes a SHA-256
+    hash of that string. The first 12 hex characters of the digest are
+    appended to ``name``, producing the actual experiment name stored in
+    Braintrust (e.g. ``"my-eval-3f8a2c91b047"``). The full digest is stored
+    in the experiment metadata under the key ``dataset_hash``.
+
+    This prevents silent experiment contamination: if you reuse the same
+    ``name`` but swap in a different dataset, the hash suffix changes and
+    Braintrust records a separate experiment rather than interleaving rows
+    from two different benchmark versions.
+
     Parameters
     ----------
     name:
-        Human-readable experiment name shown in the Braintrust UI. Each call
-        with the same name creates a new experiment run under that name, so
-        you can track regressions over time.
+        Human-readable experiment name shown in the Braintrust UI. The final
+        name stored in Braintrust is ``{name}-{12-char dataset hash}``; see
+        the *Dataset hashing* section above. Each call with the same name
+        **and** the same dataset contents will reuse the same suffixed name,
+        letting you track regressions over time without experiment pollution.
 
     dataset:
         The list of test cases to evaluate. Each EvalInput carries the query
@@ -232,12 +264,19 @@ async def run_eval(
             "before calling run_eval()."
         )
 
+    serialized = json.dumps(
+        [dataclasses.asdict(row) for row in dataset], sort_keys=True
+    )
+    dataset_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    experiment_name = f"{name}-{dataset_hash[:12]}"
+
     bt_results = await Eval(
-        name,
+        experiment_name,
         data=_to_braintrust_data(dataset),
         task=_wrap_task(task),
         scores=[_wrap_scorer(s) for s in scorers],
         api_key=api_key,
+        metadata={"dataset_hash": dataset_hash},
     )
 
     return _collect_results(bt_results, scorers)

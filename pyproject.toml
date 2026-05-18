@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "braintrust>=0.0.170",
     "autoevals>=0.0.70",
+    "anthropic>=0.25.0",
 ]
 
 [project.optional-dependencies]

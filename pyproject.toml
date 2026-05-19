@@ -12,6 +12,7 @@ dependencies = [
     "braintrust>=0.0.170",
     "autoevals>=0.0.70",
     "anthropic>=0.25.0",
+    "litellm>=1.40.0",
 ]
 
 [project.optional-dependencies]

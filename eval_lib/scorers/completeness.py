@@ -1,53 +1,41 @@
-import os
 import re
 
-import anthropic
+import litellm
 
 from eval_lib.scorers.base import BaseScorer
 from eval_lib.types import EvalInput, EvalOutput
 
 """
-The completeness scorer uses an LLM (claude sonnet) to judge how complete the given
-answer was. This requires an API key from the user to use this feature, and if it 
-is not given, then an environment error will be raised to deal with this. There 
-are 2 independent subscorers that can be individually be used by the user. 
+The completeness scorer uses an LLM to judge how complete the given answer was.
+The model is configurable — any provider supported by LiteLLM can be used
+(e.g. OpenAI, Anthropic, Gemini) by passing a model string.
+There are 2 independent scorers:
 CompletenessScorer: Checks how well the answer covers all of the points in the expected answer.
-QuestionCompletenessScorer: Checks how well the answer adresses the question in general.
+QuestionCompletenessScorer: Checks how well the answer addresses the question in general.
 """
 
-_API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
-_MODEL = "claude-sonnet-4-5"
+_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _FLOAT_PATTERN = re.compile(r"\b(1\.0|0\.\d+)\b")
 
-def _resolve_api_key(api_key: str | None) -> str:
-    resolved = api_key or os.environ.get(_API_KEY_ENV_VAR)
-    if not resolved:
-        raise EnvironmentError(
-            f"The {_API_KEY_ENV_VAR!r} environment variable is not set. "
-            "Obtain your API key from the Anthropic dashboard."
-        )
-    return resolved
-
 
 """
-Pulls the exact score out of the models response in the case of extra garbage
-Example:
-"The score is 0.8"
-return 0.8;
+Pulls the exact score out of the model's response in the case of extra text.
+Example: "The score is 0.8" → returns 0.8
+Returns 0.0 if no valid float is found.
 """
 def _extract_score(text: str) -> float:
     match = _FLOAT_PATTERN.search(text)
     return float(match.group(1)) if match else 0.0
 
+
 """
 The CompletenessScorer scores how completely the actual output covers
-everything in the expected answer. Given the expected response and the actual response, 
-the LLM will judge this score using the users given API key.
+everything in the expected answer. The LLM judges this score.
 """
-
 class CompletenessScorer(BaseScorer):
-    def __init__(self, api_key: str | None = None):
-        self._client = anthropic.Anthropic(api_key=_resolve_api_key(api_key))
+    def __init__(self, model: str = _DEFAULT_MODEL, api_key: str | None = None):
+        self._model = model
+        self._api_key = api_key
 
     def score(self, output: EvalOutput, input: EvalInput) -> float:
         prompt = (
@@ -56,20 +44,23 @@ class CompletenessScorer(BaseScorer):
             "Score how completely the actual output covers all key points in the "
             "expected answer. Respond with only a float between 0.0 and 1.0."
         )
-        message = self._client.messages.create(
-            model=_MODEL,
-            max_tokens=16,
+        response = litellm.completion(
+            model=self._model,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=16,
+            api_key=self._api_key,
         )
-        return _extract_score(message.content[0].text)
+        return _extract_score(response.choices[0].message.content)
+
 
 """
 The QuestionCompletenessScorer scores how well the answer addresses the question.
-Given the question and response, the LLM will judge this score using the users given API key.
+The LLM judges this score based on the question and actual output only.
 """
 class QuestionCompletenessScorer(BaseScorer):
-    def __init__(self, api_key: str | None = None):
-        self._client = anthropic.Anthropic(api_key=_resolve_api_key(api_key))
+    def __init__(self, model: str = _DEFAULT_MODEL, api_key: str | None = None):
+        self._model = model
+        self._api_key = api_key
 
     def score(self, output: EvalOutput, input: EvalInput) -> float:
         prompt = (
@@ -78,9 +69,10 @@ class QuestionCompletenessScorer(BaseScorer):
             "Score how completely the actual output addresses the question. "
             "Respond with only a float between 0.0 and 1.0."
         )
-        message = self._client.messages.create(
-            model=_MODEL,
-            max_tokens=16,
+        response = litellm.completion(
+            model=self._model,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=16,
+            api_key=self._api_key,
         )
-        return _extract_score(message.content[0].text)
+        return _extract_score(response.choices[0].message.content)

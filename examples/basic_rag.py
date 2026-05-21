@@ -16,24 +16,24 @@ async def mock_rag_pipeline(row: EvalInput) -> EvalOutput:
     # Replace this with your real RAG pipeline call.
     # For demonstration purposes this returns a hard-coded answer.
     return EvalOutput(
-        output=f"The answer to '{row.input}' is {row.expected}.",
+        output=f"The answer to '{row.query}' is {row.expected}.",
         citations=row.expected_citations,
     )
 
 
 dataset = [
     EvalInput(
-        input="What is the capital of France?",
+        query="What is the capital of France?",
         expected="Paris",
         expected_citations=["[Doc-1]"],
     ),
     EvalInput(
-        input="What is the capital of Germany?",
+        query="What is the capital of Germany?",
         expected="Berlin",
         expected_citations=["[Doc-2]"],
     ),
     EvalInput(
-        input="What is the capital of Japan?",
+        query="What is the capital of Japan?",
         expected="Tokyo",
         expected_citations=["[Doc-3]"],
     ),
@@ -48,12 +48,12 @@ async def main():
         scorers=[
             AccuracyScorer(),
             CitationScorer(),
-            CompletenessScorer(),
+            CompletenessScorer(api_key="your-api-key-here"),
         ],
     )
 
     for result in results:
-        print(f"Q: {result.input.input}")
+        print(f"Q: {result.input.query}")
         print(f"A: {result.output.output}")
         print(f"Scores: {result.scores}")
         print()

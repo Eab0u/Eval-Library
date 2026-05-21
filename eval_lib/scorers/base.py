@@ -10,10 +10,10 @@ and an abstract method that scores depending on the scorer, returning a float.
 
 class BaseScorer(ABC):
     """Interface / Abstract Base Class that acts as a blueprint for all scorers.
-   
-      Provides a default name property and enforces that subclasses implement
-      a score() method returning a float.
-      """
+
+    Provides a default name property, enforces that subclasses implement
+    score(), and exposes __call__ in the format Braintrust expects.
+    """
 
     @property
     def name(self) -> str:
@@ -22,3 +22,13 @@ class BaseScorer(ABC):
     @abstractmethod
     def score(self, output: EvalOutput, input: EvalInput) -> float:
         ...
+
+    def __call__(
+        self,
+        output: EvalOutput,
+        expected: str,
+        input: EvalInput | None = None,
+        **_kwargs,
+    ) -> dict:
+        """Braintrust scorer interface: receives output/expected/input, returns name+score."""
+        return {"name": self.name, "score": self.score(output=output, input=input)}

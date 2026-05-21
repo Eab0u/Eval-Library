@@ -1,14 +1,12 @@
 """
 Shared type definitions for eval_lib.
 
-This module defines the three core data shapes that flow through the library:
+This module defines the two core data shapes that flow through the library:
 
   EvalInput  → a single test case from the dataset, describing what to ask
                and what a correct answer looks like.
   EvalOutput → what the RAG pipeline (or any task function) returns for a
                given EvalInput.
-  EvalResult → the fully scored record produced by the runner after all
-               scorers have been applied to an (EvalInput, EvalOutput) pair.
 
 These dataclasses act as the contract between the runner (runner.py), the
 task functions supplied by callers, and the scorer implementations in
@@ -28,7 +26,7 @@ class EvalInput:
     expectations that scorers will compare against.
 
     Attributes:
-        input: The natural-language question or query to send to the RAG
+        query: The natural-language question or query to send to the RAG
             pipeline. For example: "What were Apple's total revenues in Q3 2023?"
 
         expected: The reference answer a correct pipeline should produce.
@@ -41,9 +39,9 @@ class EvalInput:
             cited the right sources.
     """
 
-    input: str
+    query: str
     expected: str
-    expected_citations: list[str] = field(default_factory=list)
+    expected_citations: list[str] = field(default_factory=list) #citation if its an empty list
 
 
 @dataclass
@@ -66,34 +64,4 @@ class EvalOutput:
     """
 
     output: str
-    citations: list[str] = field(default_factory=list)
-
-
-@dataclass
-class EvalResult:
-    """The fully scored record for a single (EvalInput, EvalOutput) pair.
-
-    EvalResult is assembled by the runner after all scorers have been applied.
-    It bundles the original input, the pipeline's output, and the numeric
-    scores from every scorer into a single object that Braintrust can ingest
-    and that callers can inspect programmatically.
-
-    Attributes:
-        input: The original EvalInput test case that was evaluated, preserved
-            here so results are self-contained and can be analysed without
-            rejoining against the source dataset.
-
-        output: The EvalOutput produced by the task function for this test
-            case.
-
-        scores: A mapping from scorer name to a float score in [0.0, 1.0].
-            Keys are the human-readable names of each scorer (e.g.
-            "accuracy", "completeness", "citation"). A score of 1.0 means
-            the scorer considered the output fully correct; 0.0 means it
-            failed entirely. Partial scores in between are allowed and
-            encouraged where the scorer supports them.
-    """
-
-    input: EvalInput
-    output: EvalOutput
-    scores: dict[str, float] = field(default_factory=dict)
+    citations: list[str] = field(default_factory=list) 

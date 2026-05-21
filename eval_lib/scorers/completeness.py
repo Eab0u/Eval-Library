@@ -30,27 +30,53 @@ def _extract_score(text: str) -> float:
 
 """
 The CompletenessScorer scores how completely the actual output covers
-everything in the expected answer. The LLM judges this score.
+everything in the expected answer. The LLM judges this score. If no api-key
+is passed in to the completeness scorer, then it will throw a Value Error. 
 """
 class CompletenessScorer(BaseScorer):
-    def __init__(self, model: str = _DEFAULT_MODEL, api_key: str | None = None):
+    def __init__(self, api_key: str, model: str = _DEFAULT_MODEL):
+        if not api_key:
+            raise ValueError("api_key is required for CompletenessScorer.")
         self._model = model
         self._api_key = api_key
 
     def score(self, output: EvalOutput, input: EvalInput) -> float:
-        prompt = (
-            f"Expected answer: {input.expected}\n"
-            f"Actual output: {output.output}\n\n"
-            "Score how completely the actual output covers all key points in the "
-            "expected answer. Respond with only a float between 0.0 and 1.0."
-        )
+        actual_answer: str = output.output
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Your goal is to score how completely an actual output covers all key points "
+                    "in an expected answer. You will be given an expected answer and an actual output. "
+                    "Respond with only a float between 0.0 and 1.0, where 1.0 means the output fully "
+                    "covers every key point and 0.0 means it covers none."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "<expected>The Eiffel Tower is located in Paris, France. "
+                    "It was built in 1889 and stands 330 meters tall.</expected>\n"
+                    "<output>The Eiffel Tower is in Paris.</output>"
+                ),
+            },
+            {"role": "assistant", "content": "0.3"},
+            {
+                "role": "user",
+                "content": (
+                    f"<expected>{input.expected}</expected>\n"
+                    f"<output>{actual_answer}</output>"
+                ),
+            },
+        ]
         response = litellm.completion(
             model=self._model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=16,
             api_key=self._api_key,
         )
-        return _extract_score(response.choices[0].message.content)
+        llm_response: str = response.choices[0].message.content
+        return _extract_score(llm_response)
 
 
 """
@@ -58,21 +84,45 @@ The QuestionCompletenessScorer scores how well the answer addresses the question
 The LLM judges this score based on the question and actual output only.
 """
 class QuestionCompletenessScorer(BaseScorer):
-    def __init__(self, model: str = _DEFAULT_MODEL, api_key: str | None = None):
+    def __init__(self, api_key: str, model: str = _DEFAULT_MODEL):
+        if not api_key:
+            raise ValueError("api_key is required for QuestionCompletenessScorer.")
         self._model = model
         self._api_key = api_key
 
     def score(self, output: EvalOutput, input: EvalInput) -> float:
-        prompt = (
-            f"Question: {input.input}\n"
-            f"Actual output: {output.output}\n\n"
-            "Score how completely the actual output addresses the question. "
-            "Respond with only a float between 0.0 and 1.0."
-        )
+        actual_answer: str = output.output
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Your goal is to score how completely an actual output addresses a given question. "
+                    "You will be given a question and an actual output. "
+                    "Respond with only a float between 0.0 and 1.0, where 1.0 means the output fully "
+                    "addresses the question and 0.0 means it does not address it at all."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "<question>What year was the Eiffel Tower built and how tall is it?</question>\n"
+                    "<output>The Eiffel Tower was built in 1889 and stands 330 meters tall.</output>"
+                ),
+            },
+            {"role": "assistant", "content": "1.0"},
+            {
+                "role": "user",
+                "content": (
+                    f"<question>{input.query}</question>\n"
+                    f"<output>{actual_answer}</output>"
+                ),
+            },
+        ]
         response = litellm.completion(
             model=self._model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=16,
             api_key=self._api_key,
         )
-        return _extract_score(response.choices[0].message.content)
+        llm_response: str = response.choices[0].message.content
+        return _extract_score(llm_response)

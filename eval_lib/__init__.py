@@ -5,6 +5,6 @@ Exports the primary run_eval() entry point and scorer classes for use in eval pi
 """
 
 from eval_lib.runner import run_eval
-from eval_lib.types import EvalInput, EvalOutput, EvalResult
+from eval_lib.types import EvalInput, EvalOutput
 
-__all__ = ["run_eval", "EvalInput", "EvalOutput", "EvalResult"]
+__all__ = ["run_eval", "EvalInput", "EvalOutput"]

@@ -1,3 +1,4 @@
+import os
 import re
 
 import litellm
@@ -7,15 +8,27 @@ from eval_lib.types import EvalInput, EvalOutput
 
 """
 The completeness scorer uses an LLM to judge how complete the given answer was.
-The model is configurable — any provider supported by LiteLLM can be used
-(e.g. OpenAI, Anthropic, Gemini) by passing a model string.
+The model is read from the EVAL_LIB_MODEL environment variable, so any provider
+supported by LiteLLM can be used (e.g. OpenAI, Anthropic, Gemini) by setting
+that variable to the appropriate model string. The corresponding API key must
+also be set as an environment variable (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY).
 There are 2 independent scorers:
 CompletenessScorer: Checks how well the answer covers all of the points in the expected answer.
 QuestionCompletenessScorer: Checks how well the answer addresses the question in general.
 """
 
-_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _FLOAT_PATTERN = re.compile(r"\b(1\.0|0\.\d+)\b")
+
+
+def _get_model() -> str:
+    model = os.environ.get("EVAL_LIB_MODEL")
+    if not model:
+        raise EnvironmentError(
+            "EVAL_LIB_MODEL is not set. Set it to any LiteLLM-supported model string "
+            "(e.g. 'gpt-4o-mini', 'claude-haiku-4-5-20251001') and ensure the matching "
+            "API key environment variable is also set."
+        )
+    return model
 
 
 """
@@ -30,16 +43,10 @@ def _extract_score(text: str) -> float:
 
 """
 The CompletenessScorer scores how completely the actual output covers
-everything in the expected answer. The LLM judges this score. If no api-key
-is passed in to the completeness scorer, then it will throw a Value Error. 
+everything in the expected answer. The LLM judges this score.
+The model is determined by the EVAL_LIB_MODEL environment variable.
 """
 class CompletenessScorer(BaseScorer):
-    def __init__(self, api_key: str, model: str = _DEFAULT_MODEL):
-        if not api_key:
-            raise ValueError("api_key is required for CompletenessScorer.")
-        self._model = model
-        self._api_key = api_key
-
     def score(self, output: EvalOutput, input: EvalInput) -> float:
         actual_answer: str = output.output
         messages = [
@@ -69,12 +76,7 @@ class CompletenessScorer(BaseScorer):
                 ),
             },
         ]
-        response = litellm.completion(
-            model=self._model,
-            messages=messages,
-            max_tokens=16,
-            api_key=self._api_key,
-        )
+        response = litellm.completion(model=_get_model(), messages=messages, max_tokens=16)
         llm_response: str = response.choices[0].message.content
         return _extract_score(llm_response)
 
@@ -82,14 +84,9 @@ class CompletenessScorer(BaseScorer):
 """
 The QuestionCompletenessScorer scores how well the answer addresses the question.
 The LLM judges this score based on the question and actual output only.
+The model is determined by the EVAL_LIB_MODEL environment variable.
 """
 class QuestionCompletenessScorer(BaseScorer):
-    def __init__(self, api_key: str, model: str = _DEFAULT_MODEL):
-        if not api_key:
-            raise ValueError("api_key is required for QuestionCompletenessScorer.")
-        self._model = model
-        self._api_key = api_key
-
     def score(self, output: EvalOutput, input: EvalInput) -> float:
         actual_answer: str = output.output
         messages = [
@@ -118,11 +115,6 @@ class QuestionCompletenessScorer(BaseScorer):
                 ),
             },
         ]
-        response = litellm.completion(
-            model=self._model,
-            messages=messages,
-            max_tokens=16,
-            api_key=self._api_key,
-        )
+        response = litellm.completion(model=_get_model(), messages=messages, max_tokens=16)
         llm_response: str = response.choices[0].message.content
         return _extract_score(llm_response)
